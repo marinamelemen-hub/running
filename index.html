@@ -346,9 +346,9 @@ function buildCharts(s){
     ZC=new Chart(ze,{type:'line',data:{labels:months.map(m=>m.slice(5)+'/'+m.slice(2,4)),datasets},
       options:{responsive:true,maintainAspectRatio:false,
         plugins:{legend:{labels:{color:'#8a9189',font:{size:10,family:'DM Mono'},boxWidth:10,padding:12}},
-          tooltip:{...tt,callbacks:{label:c=>c.dataset.label+': '+paceStr(c.parsed.y)+'/km'}}},
+          tooltip:{...tt,callbacks:{label:c=>c.dataset.label+': '+ps(c.parsed.y)+'/km'}}},
         scales:{
-          y:{reverse:true,min:4.8,max:5.7,ticks:{...tc,callback:v=>paceStr(v)},grid:{color:gclr},border:{display:false}},
+          y:{reverse:true,min:4.9,max:5.9,ticks:{...tc,callback:v=>ps(v)},grid:{color:gclr},border:{display:false}},
           x:{ticks:tc,grid:{display:false},border:{display:false}}
         }}});
   }
@@ -365,10 +365,10 @@ function buildCharts(s){
       ]},
       options:{responsive:true,maintainAspectRatio:false,
         plugins:{legend:{labels:{color:'#8a9189',font:{size:10,family:'DM Mono'},boxWidth:10,padding:12}},
-          tooltip:{...tt,callbacks:{label:c=>c.dataset.label==='FC drift'?'Drift: '+(c.parsed.y*100-100).toFixed(1)+'% acima avg':('Pace: '+paceStr(c.parsed.y)+'/km')}}},
+          tooltip:{...tt,callbacks:{label:c=>c.dataset.label==='FC drift'?'Drift: '+(c.parsed.y*100-100).toFixed(1)+'% acima avg':('Pace: '+ps(c.parsed.y)+'/km')}}},
         scales:{
           y:{min:1.03,max:1.15,ticks:{...tc,callback:v=>'+'+((v-1)*100).toFixed(0)+'%'},grid:{color:gclr},border:{display:false}},
-          yP:{position:'right',reverse:true,min:4.9,max:5.7,ticks:{...tc,callback:v=>paceStr(v)},grid:{display:false},border:{display:false}},
+          yP:{position:'right',reverse:true,min:4.9,max:5.7,ticks:{...tc,callback:v=>ps(v)},grid:{display:false},border:{display:false}},
           x:{ticks:{...tc,maxRotation:45},grid:{display:false},border:{display:false}}
         }}});
   }
@@ -510,9 +510,9 @@ async function runAnalysis(){
   const _zs=s.zoneData;
   const _zoneSummary=Object.keys(_zs).sort().map(m=>{
     const z=_zs[m];
-    return m+': '+Object.entries(z).map(([k,v])=>k+' -> '+paceStr(v)+'/km').join(', ');
+    return m+': '+Object.entries(z).map(([k,v])=>k+' -> '+ps(v)+'/km').join(', ');
   }).join(' | ');
-  const _driftSummary=s.driftData.map(d=>'longão '+d.date+' pace '+paceStr(d.pace)+'/km drift '+(((d.drift-1)*100).toFixed(1))+'%').join(' | ');
+  const _driftSummary=s.driftData.map(d=>'longão '+d.date+' pace '+ps(d.pace)+'/km drift '+(((d.drift-1)*100).toFixed(1))+'%').join(' | ');
   const prompt='Você é um treinador de corrida especialista. Analise com foco em evolução real de performance.\n\n'
     +'ATLETA: PR meia 1:43 (4:50/km FC174, POA jun/2025)\n'
     +'METAS: Meia POA fim mai/2026 | Maratona Amsterdam out/2026\n'
