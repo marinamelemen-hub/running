@@ -286,11 +286,31 @@ function stats(){
   const wks={};l90.forEach(r=>{const w=wkey(r.date);if(!wks[w])wks[w]={week:r.date.slice(5,7)+'/'+r.date.slice(8),km:0};wks[w].km+=r.dist_km;});
   const wv=Object.values(wks).sort((a,b)=>a.week.localeCompare(b.week));
   const pt=lng.slice(-16).map(r=>({date:r.date.slice(5),pace:r.pace_min_km,hr:r.hr_avg||null}));
-  return{l90,v30,v30p,vt:v30p>0?((v30-v30p)/v30p*100):0,lng,ints,prgs,ll:lng.at(-1)||null,li:ints.at(-1)||null,bp,sct,wv,pt,tot:l90.length||1};
+  // Zone pace data by month
+  const allRuns6m=RUNS.filter(r=>{const c=new Date();c.setDate(c.getDate()-180);return new Date(r.date)>=c&&r.dist_km>=5&&r.pace_min_km>3&&r.pace_min_km<8&&r.hr_avg>0;});
+  const zoneMap={'Z2 ≤162':[0,162],'Z3 163-170':[163,170],'Z4 171-177':[171,177]};
+  const zoneData={};
+  allRuns6m.forEach(r=>{
+    const month=r.date.slice(0,7);
+    if(!zoneData[month])zoneData[month]={};
+    Object.entries(zoneMap).forEach(([zn,[lo,hi]])=>{
+      if(r.hr_avg>=lo&&r.hr_avg<=hi){
+        if(!zoneData[month][zn])zoneData[month][zn]=[];
+        zoneData[month][zn].push(r.pace_min_km);
+      }
+    });
+  });
+  // Convert arrays to averages
+  Object.keys(zoneData).forEach(m=>{Object.keys(zoneData[m]).forEach(z=>{const arr=zoneData[m][z];zoneData[m][z]=arr.reduce((s,v)=>s+v,0)/arr.length;});});
+
+  // Drift data for long runs
+  const driftData=lng.slice(-10).filter(r=>r.hr_max>0&&r.hr_avg>0).map(r=>({date:r.date.slice(5),drift:r.hr_max/r.hr_avg,pace:r.pace_min_km}));
+
+  return{l90,v30,v30p,vt:v30p>0?((v30-v30p)/v30p*100):0,lng,ints,prgs,ll:lng.at(-1)||null,li:ints.at(-1)||null,bp,sct,wv,pt,tot:l90.length||1,zoneData,driftData};
 }
 
-let PC=null,VC=null;
-function dc2(){[PC,VC].forEach(c=>{if(c)c.destroy();});PC=VC=null;}
+let PC=null,VC=null,ZC=null,DC=null;
+function dc2(){[PC,VC,ZC,DC].forEach(c=>{if(c)c.destroy();});PC=VC=ZC=DC=null;}
 function buildCharts(s){
   dc2();
   const tc={font:{size:10,family:'DM Mono'},color:'#4d5a4d'};
@@ -306,6 +326,51 @@ function buildCharts(s){
   const ve=document.getElementById('cv');
   if(ve&&s.wv.length>1){
     VC=new Chart(ve,{type:'bar',data:{labels:s.wv.map(w=>w.week),datasets:[{data:s.wv.map(w=>w.km),backgroundColor:'rgba(74,222,128,0.3)',borderColor:'rgba(74,222,128,0.6)',borderWidth:1,borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{...tt,callbacks:{label:c=>`${c.parsed.y.toFixed(0)} km`}}},scales:{y:{ticks:tc,grid:{color:gclr},border:{display:false}},x:{ticks:{...tc,maxRotation:45},grid:{display:false},border:{display:false}}}}});
+  }
+
+  // Zone pace evolution chart
+  const ze=document.getElementById('cz');
+  if(ze){
+    const zd=s.zoneData;
+    const months=Object.keys(zd).sort();
+    const zones=['Z2 ≤162','Z3 163-170','Z4 171-177'];
+    const zColors=['#4ade80','#fbbf24','#f87171'];
+    const datasets=zones.map((z,i)=>({
+      label:z,
+      data:months.map(m=>zd[m]&&zd[m][z]?zd[m][z]:null),
+      borderColor:zColors[i],backgroundColor:'transparent',
+      borderWidth:2,pointRadius:5,pointBackgroundColor:zColors[i],
+      tension:0.3,spanGaps:true
+    })).filter(d=>d.data.some(v=>v!==null));
+    if(ZC)ZC.destroy();
+    ZC=new Chart(ze,{type:'line',data:{labels:months.map(m=>m.slice(5)+'/'+m.slice(2,4)),datasets},
+      options:{responsive:true,maintainAspectRatio:false,
+        plugins:{legend:{labels:{color:'#8a9189',font:{size:10,family:'DM Mono'},boxWidth:10,padding:12}},
+          tooltip:{...tt,callbacks:{label:c=>c.dataset.label+': '+paceStr(c.parsed.y)+'/km'}}},
+        scales:{
+          y:{reverse:true,min:4.8,max:5.7,ticks:{...tc,callback:v=>paceStr(v)},grid:{color:gclr},border:{display:false}},
+          x:{ticks:tc,grid:{display:false},border:{display:false}}
+        }}});
+  }
+
+  // Drift chart for long runs
+  const de=document.getElementById('cd');
+  if(de){
+    const drifts=s.driftData;
+    if(DC)DC.destroy();
+    DC=new Chart(de,{type:'line',
+      data:{labels:drifts.map(d=>d.date),datasets:[
+        {label:'FC drift',data:drifts.map(d=>d.drift),borderColor:'#f87171',backgroundColor:'rgba(248,113,113,0.08)',borderWidth:2,pointRadius:4,pointBackgroundColor:'#f87171',fill:true,tension:0.3},
+        {label:'Pace',data:drifts.map(d=>d.pace),borderColor:'#4ade80',backgroundColor:'transparent',borderWidth:1.5,borderDash:[4,3],pointRadius:3,pointBackgroundColor:'#4ade80',yAxisID:'yP',tension:0.3}
+      ]},
+      options:{responsive:true,maintainAspectRatio:false,
+        plugins:{legend:{labels:{color:'#8a9189',font:{size:10,family:'DM Mono'},boxWidth:10,padding:12}},
+          tooltip:{...tt,callbacks:{label:c=>c.dataset.label==='FC drift'?'Drift: '+(c.parsed.y*100-100).toFixed(1)+'% acima avg':('Pace: '+paceStr(c.parsed.y)+'/km')}}},
+        scales:{
+          y:{min:1.03,max:1.15,ticks:{...tc,callback:v=>'+'+((v-1)*100).toFixed(0)+'%'},grid:{color:gclr},border:{display:false}},
+          yP:{position:'right',reverse:true,min:4.9,max:5.7,ticks:{...tc,callback:v=>paceStr(v)},grid:{display:false},border:{display:false}},
+          x:{ticks:{...tc,maxRotation:45},grid:{display:false},border:{display:false}}
+        }}});
   }
 }
 
@@ -341,6 +406,8 @@ function rdDash(){
         ${Object.entries(s.sct).map(([t,n])=>'<div class="sbr"><div class="sbh"><span style="font-size:11px;color:'+clr(t)+';font-family:var(--mono)">'+lbl(t)+'</span><span class="mu" style="font-size:11px">'+n+' ('+Math.round(n/s.tot*100)+'%)</span></div><div class="sbbg"><div class="sbf" style="width:'+Math.round(n/s.tot*100)+'%;background:'+clr(t)+'"></div></div></div>').join('')}
       </div>
     </div>
+    <div class="cd" style="margin-top:0"><div class="ct">Evolução do pace por zona de FC<div style="display:flex;gap:12px"><span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)"><span style="width:8px;height:3px;background:#4ade80;display:inline-block;border-radius:1px"></span>Z2 ≤162</span><span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)"><span style="width:8px;height:3px;background:#fbbf24;display:inline-block;border-radius:1px"></span>Z3 163-170</span><span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)"><span style="width:8px;height:3px;background:#f87171;display:inline-block;border-radius:1px"></span>Z4 171-177</span></div></div><p style="font-size:11px;color:var(--t3);font-family:var(--mono);margin:-8px 0 10px">Se o pace melhora mantendo a mesma zona → forma crescendo</p><div style="height:200px"><canvas id="cz"></canvas></div></div>
+    <div class="cd" style="margin-top:14px"><div class="ct">Fadiga nos longões — drift FC (FC max / FC avg)<div style="display:flex;gap:12px"><span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)"><span style="width:8px;height:3px;background:#f87171;display:inline-block;border-radius:1px"></span>Drift</span><span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)"><span style="width:8px;height:3px;background:#4ade80;border-top:1px dashed #4ade80;display:inline-block"></span>Pace</span></div></div><p style="font-size:11px;color:var(--t3);font-family:var(--mono);margin:-8px 0 10px">Drift menor = coração menos sobrecarregado = mais eficiente</p><div style="height:160px"><canvas id="cd"></canvas></div></div>
     <div class="cd" style="margin-top:14px"><div class="ct">Últimas corridas</div>
       <table class="rt"><thead><tr><th>Data</th><th>Tipo</th><th>Nome</th><th style="text-align:right">km</th><th style="text-align:right">Pace</th><th style="text-align:right">FC</th></tr></thead>
       <tbody>${[...RUNS].reverse().slice(0,10).map(r=>'<tr><td class="mu">'+r.date.slice(5)+'</td><td><span class="badge '+BC[r.type]+'">'+SL[r.type]+'</span></td><td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+r.name+'</td><td class="mu" style="text-align:right">'+r.dist_km.toFixed(1)+'</td><td class="pa" style="text-align:right">'+ps(r.pace_min_km)+'</td><td class="mu" style="text-align:right">'+(r.hr_avg?Math.round(r.hr_avg):'—')+'</td></tr>').join('')}</tbody></table>
@@ -375,6 +442,36 @@ function rdStr(){
     +'</div>';
 }
 
+
+function md2html(text){
+  if(!text)return'';
+  return text
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+    .replace(/^#{1,3}\s+(.+)$/gm,'<p style="font-size:14px;font-weight:500;color:var(--t1);margin:14px 0 6px">$1</p>')
+    .replace(/^\d+\.\s+(.+)$/gm,'<div style="display:flex;gap:8px;margin-bottom:6px"><span style="color:var(--gr);font-weight:500;flex-shrink:0">→</span><span>$1</span></div>')
+    .replace(/^[-•]\s+(.+)$/gm,'<div style="display:flex;gap:8px;margin-bottom:4px"><span style="color:var(--t3);flex-shrink:0">·</span><span>$1</span></div>')
+    .replace(/\n\n/g,'</p><p style="margin:0 0 10px">')
+    .replace(/\n/g,'<br>');
+}
+
+function buildRacePrediction(text){
+  // Extract time predictions from analysis text
+  const hmMatch=text.match(/1:[3-4]\d(?::[0-5]\d)?/g);
+  const maMatch=text.match(/3:[3-5]\d(?::[0-5]\d)?/g)||text.match(/4:[0-1]\d(?::[0-5]\d)?/g);
+  const hmTime=hmMatch?hmMatch[0]:'1:40';
+  const maTime=maMatch?maMatch[0]:'3:50';
+  return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px 0">'
+    +'<div style="background:var(--grA);border:.5px solid var(--gr2);border-radius:10px;padding:14px 16px">'
+    +'<p style="font-size:10px;font-family:var(--mono);color:var(--gr);text-transform:uppercase;letter-spacing:.07em;margin:0 0 6px">Meia · POA</p>'
+    +'<p style="font-size:32px;font-weight:300;letter-spacing:-.02em;color:var(--gr);margin:0;line-height:1">'+hmTime+'</p>'
+    +'<p style="font-size:11px;color:var(--gr2);margin:5px 0 0;font-family:var(--mono)">projeção realista</p></div>'
+    +'<div style="background:var(--puA);border:.5px solid #6d28d9;border-radius:10px;padding:14px 16px">'
+    +'<p style="font-size:10px;font-family:var(--mono);color:var(--pu);text-transform:uppercase;letter-spacing:.07em;margin:0 0 6px">Maratona · Amsterdam</p>'
+    +'<p style="font-size:32px;font-weight:300;letter-spacing:-.02em;color:var(--pu);margin:0;line-height:1">'+maTime+'</p>'
+    +'<p style="font-size:11px;color:#7c3aed;margin:5px 0 0;font-family:var(--mono)">projeção realista</p></div>'
+    +'</div>';
+}
 function rdAna(){
   const el=document.getElementById('ac');
   const ak=localStorage.getItem('ak')||'';
@@ -389,10 +486,11 @@ function rdAna(){
   el.innerHTML=
     '<div class="ameta"><span class="mu" style="font-size:11px">'+lat.date+' · '+lat.rc+' corridas · '+lat.v+'km/mês</span>'
     +'<button class="btn bg" style="font-size:11px" onclick="runAnalysis()">Atualizar ↗</button></div>'
-    +'<div class="abox">'+lat.text+'</div>'
+    + buildRacePrediction(lat.text)
+    +'<div class="abox" style="font-size:13px;line-height:1.8">'+md2html(lat.text)+'</div>'
     +(prev.length
-      ?'<div style="margin-top:20px"><div style="font-size:10px;font-family:var(--mono);color:var(--t3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px">Anteriores ('+prev.length+')</div>'
-       +prev.map(a=>'<div class="acc"><div class="acch" onclick="this.nextSibling.classList.toggle(\'open\')"><span style="font-family:var(--mono);color:var(--t2)">'+a.date+'</span><span style="color:var(--t3);font-size:11px;font-family:var(--mono)">'+a.rc+' corridas</span></div><div class="accb">'+a.text+'</div></div>').join('')+'</div>'
+      ?'<div style="margin-top:20px"><div style="font-size:10px;font-family:var(--mono);color:var(--t3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px">Análises anteriores ('+prev.length+')</div>'
+       +prev.map(a=>'<div class="acc"><div class="acch" onclick="this.nextSibling.classList.toggle(\'open\')"><span style="font-family:var(--mono);color:var(--t2)">'+a.date+'</span><span style="color:var(--t3);font-size:11px;font-family:var(--mono)">'+a.rc+' corridas</span></div><div class="accb" style="font-size:13px;line-height:1.8">'+md2html(a.text)+'</div></div>').join('')+'</div>'
       :'');
 }
 
@@ -408,7 +506,28 @@ async function runAnalysis(){
   const l90=last(90).sort((a,b)=>b.date.localeCompare(a.date));
   const s=stats();
   const lines=l90.map(r=>r.date+' ['+SL[r.type]+'] '+r.dist_km.toFixed(1)+'km '+ps(r.pace_min_km)+'/km FC:'+Math.round(r.hr_avg||0)+'avg/'+Math.round(r.hr_max||0)+'max').join('\n');
-  const prompt='Você é um treinador de corrida especialista. Analise:\n\nATLETA: PR meia 1:43 (4:50/km FC174, POA jun/2025)\nMETAS: Meia POA fim mai/2026 | Maratona Amsterdam out/2026\nESTRUTURA: tiros/progressivos Ter+Qui, longão fim de semana\n\nÚLTIMAS '+l90.length+' CORRIDAS:\n'+lines+'\n\nRESUMO: '+s.ints.length+' tiros | '+s.prgs.length+' progressivos | '+s.v30.toFixed(0)+'km/mês'+(s.ll?' | último longão: '+s.ll.dist_km.toFixed(1)+'km '+ps(s.ll.pace_min_km)+'/km FC'+Math.round(s.ll.hr_avg):'')+(s.bp?' | melhor progressivo: '+ps(s.bp)+'/km':'')+'\n\nResponda em português:\n1. **Eficiência FC vs pace** — estou evoluindo? (compare meses)\n2. **Projeção Meia POA** — conservador / realista / dia perfeito com pace alvo\n3. **Projeção Maratona Amsterdam** — tempo e ponto de atenção no treino\n4. **Próximos 2 treinos** — recomendação concreta';
+  // Build zone and drift summaries
+  const _zs=s.zoneData;
+  const _zoneSummary=Object.keys(_zs).sort().map(m=>{
+    const z=_zs[m];
+    return m+': '+Object.entries(z).map(([k,v])=>k+' -> '+paceStr(v)+'/km').join(', ');
+  }).join(' | ');
+  const _driftSummary=s.driftData.map(d=>'longão '+d.date+' pace '+paceStr(d.pace)+'/km drift '+(((d.drift-1)*100).toFixed(1))+'%').join(' | ');
+  const prompt='Você é um treinador de corrida especialista. Analise com foco em evolução real de performance.\n\n'
+    +'ATLETA: PR meia 1:43 (4:50/km FC174, POA jun/2025)\n'
+    +'METAS: Meia POA fim mai/2026 | Maratona Amsterdam out/2026\n'
+    +'ESTRUTURA: tiros/progressivos Ter+Qui, longão fim de semana\n\n'
+    +'PACE POR ZONA DE FC (evolucao mensal):\n'+_zoneSummary+'\n\n'
+    +'DRIFT CARDÍACO NOS LONGOES (FC max/avg - 1 = fadiga durante o treino):\n'+_driftSummary+'\n\n'
+    +'ULTIMAS '+l90.length+' CORRIDAS:\n'+lines+'\n\n'
+    +'RESUMO: '+s.ints.length+' tiros | '+s.prgs.length+' progressivos | '+s.v30.toFixed(0)+'km/mes'
+    +(s.ll?' | ultimo longao: '+s.ll.dist_km.toFixed(1)+'km '+ps(s.ll.pace_min_km)+'/km FC'+Math.round(s.ll.hr_avg):'')
+    +(s.bp?' | melhor progressivo: '+ps(s.bp)+'/km':'')
+    +'\n\nResponda em portugues, SEM codigo, texto limpo com **negrito** para destaques:\n'
+    +'1. **Eficiencia FC vs pace** — analise a evolucao por zona (Z2/Z3/Z4), o drift cardíaco nos longoes, o que isso significa para a forma atual\n'
+    +'2. **Projecao Meia POA** — 3 cenarios (conservador/realista/dia perfeito) com tempo e pace alvo. Inclua os tempos no formato 1:XX\n'
+    +'3. **Projecao Maratona Amsterdam** — tempo estimado (formato 3:XX ou 4:XX) e o principal ajuste de treino necessario\n'
+    +'4. **Proximos 2 treinos** — sessoes concretas com distancia, pace alvo e FC alvo';
   try{
     const res=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
