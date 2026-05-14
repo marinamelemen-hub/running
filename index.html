@@ -316,6 +316,8 @@ function buildCharts(s){
   const tc={font:{size:10,family:'DM Mono'},color:'#4d5a4d'};
   const gclr='rgba(255,255,255,0.04)';
   const tt={backgroundColor:'#1a1e1a',borderColor:'#252a25',borderWidth:1,titleColor:'#8a9189',bodyColor:'#e8ebe8'};
+
+  // ── Pace trend for long runs ──────────────────────────────────────────────
   const ce=document.getElementById('cp');
   if(ce&&s.pt.length>1){
     PC=new Chart(ce,{data:{labels:s.pt.map(d=>d.date),datasets:[
@@ -323,54 +325,130 @@ function buildCharts(s){
       {type:'line',label:'hr',data:s.pt.map(d=>d.hr),yAxisID:'yH',borderColor:'#f87171',borderWidth:1.5,borderDash:[4,3],pointRadius:2,pointBackgroundColor:'#f87171',pointBorderWidth:0,backgroundColor:'transparent'}
     ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{...tt,callbacks:{label:c=>c.dataset.label==='pace'?'Pace: '+ps(c.parsed.y)+'/km':'FC: '+Math.round(c.parsed.y)+' bpm'}}},scales:{yP:{type:'linear',position:'left',reverse:true,min:4.3,max:5.7,ticks:{...tc,callback:v=>ps(v)},grid:{color:gclr},border:{display:false}},yH:{type:'linear',position:'right',min:150,max:185,ticks:{...tc,color:'#f8717155'},grid:{display:false},border:{display:false}},x:{ticks:tc,grid:{display:false},border:{display:false}}}}});
   }
+
+  // ── Volume chart ──────────────────────────────────────────────────────────
   const ve=document.getElementById('cv');
   if(ve&&s.wv.length>1){
-    VC=new Chart(ve,{type:'bar',data:{labels:s.wv.map(w=>w.week),datasets:[{data:s.wv.map(w=>w.km),backgroundColor:'rgba(74,222,128,0.3)',borderColor:'rgba(74,222,128,0.6)',borderWidth:1,borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{...tt,callbacks:{label:c=>`${c.parsed.y.toFixed(0)} km`}}},scales:{y:{ticks:tc,grid:{color:gclr},border:{display:false}},x:{ticks:{...tc,maxRotation:45},grid:{display:false},border:{display:false}}}}});
+    VC=new Chart(ve,{type:'bar',data:{labels:s.wv.map(w=>w.week),datasets:[{data:s.wv.map(w=>w.km),backgroundColor:'rgba(74,222,128,0.3)',borderColor:'rgba(74,222,128,0.6)',borderWidth:1,borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{...tt,callbacks:{label:c=>c.parsed.y.toFixed(0)+' km'}}},scales:{y:{ticks:tc,grid:{color:gclr},border:{display:false}},x:{ticks:{...tc,maxRotation:45},grid:{display:false},border:{display:false}}}}});
   }
 
-  // Zone pace evolution chart
+  // ── Zone pace evolution chart ─────────────────────────────────────────────
   const ze=document.getElementById('cz');
   if(ze){
-    const zd=s.zoneData;
-    const months=Object.keys(zd).sort();
-    const zones=['Z2 ≤162','Z3 163-170','Z4 171-177'];
-    const zColors=['#4ade80','#fbbf24','#f87171'];
-    const datasets=zones.map((z,i)=>({
-      label:z,
-      data:months.map(m=>zd[m]&&zd[m][z]?zd[m][z]:null),
-      borderColor:zColors[i],backgroundColor:'transparent',
-      borderWidth:2,pointRadius:5,pointBackgroundColor:zColors[i],
-      tension:0.3,spanGaps:true
-    })).filter(d=>d.data.some(v=>v!==null));
-    if(ZC)ZC.destroy();
-    ZC=new Chart(ze,{type:'line',data:{labels:months.map(m=>m.slice(5)+'/'+m.slice(2,4)),datasets},
-      options:{responsive:true,maintainAspectRatio:false,
-        plugins:{legend:{labels:{color:'#8a9189',font:{size:10,family:'DM Mono'},boxWidth:10,padding:12}},
-          tooltip:{...tt,callbacks:{label:c=>c.dataset.label+': '+ps(c.parsed.y)+'/km'}}},
-        scales:{
-          y:{reverse:true,min:4.9,max:5.9,ticks:{...tc,callback:v=>ps(v)},grid:{color:gclr},border:{display:false}},
-          x:{ticks:tc,grid:{display:false},border:{display:false}}
-        }}});
+    try{
+      // Compute zone data directly from RUNS
+      const cutoff=new Date();cutoff.setDate(cutoff.getDate()-210);
+      const runs6m=RUNS.filter(r=>new Date(r.date)>=cutoff&&r.dist_km>=5&&r.pace_min_km>3.5&&r.pace_min_km<8&&r.hr_avg>=140);
+      
+      // Simple numeric zones
+      const ZONES=[
+        {name:'Facil (FC<163)',lo:0,hi:162,color:'#4ade80'},
+        {name:'Moderado (163-170)',lo:163,hi:170,color:'#fbbf24'},
+        {name:'Forte (171+)',lo:171,hi:999,color:'#f87171'}
+      ];
+      
+      // Group by month
+      const byMonth={};
+      runs6m.forEach(r=>{
+        const m=r.date.slice(0,7);
+        if(!byMonth[m])byMonth[m]={};
+        ZONES.forEach(z=>{
+          if(r.hr_avg>=z.lo&&r.hr_avg<=z.hi){
+            if(!byMonth[m][z.name])byMonth[m][z.name]=[];
+            byMonth[m][z.name].push(r.pace_min_km);
+          }
+        });
+      });
+      
+      const months=Object.keys(byMonth).sort();
+      
+      if(months.length>=2){
+        const datasets=ZONES.map(z=>({
+          label:z.name,
+          data:months.map(m=>{
+            const arr=byMonth[m][z.name];
+            return arr&&arr.length>0?arr.reduce((a,b)=>a+b,0)/arr.length:null;
+          }),
+          borderColor:z.color,
+          backgroundColor:'transparent',
+          borderWidth:2.5,
+          pointRadius:5,
+          pointBackgroundColor:z.color,
+          tension:0.3,
+          spanGaps:true
+        })).filter(d=>d.data.some(v=>v!==null));
+        
+        const allPaces=months.flatMap(m=>ZONES.flatMap(z=>(byMonth[m][z.name]||[])));
+        const minP=Math.min(...allPaces)-0.1;
+        const maxP=Math.max(...allPaces)+0.1;
+        
+        if(ZC)ZC.destroy();
+        ZC=new Chart(ze,{
+          type:'line',
+          data:{labels:months.map(m=>{const[y,mo]=m.split('-');return mo+'/'+y.slice(2);}),datasets},
+          options:{
+            responsive:true,maintainAspectRatio:false,
+            plugins:{
+              legend:{display:true,position:'top',labels:{color:'#8a9189',font:{size:10,family:'DM Mono'},boxWidth:10,padding:10,usePointStyle:true}},
+              tooltip:{...tt,callbacks:{label:c=>'  '+c.dataset.label+': '+ps(c.parsed.y)+'/km'}}
+            },
+            scales:{
+              y:{reverse:true,min:Math.max(4.5,minP-0.05),max:Math.min(6.2,maxP+0.05),
+                ticks:{...tc,callback:v=>ps(v)},grid:{color:gclr},border:{display:false}},
+              x:{ticks:tc,grid:{display:false},border:{display:false}}
+            }
+          }
+        });
+      } else {
+        ze.parentElement.innerHTML='<p style="font-size:12px;color:var(--t3);padding:20px 0;text-align:center">Dados insuficientes (minimo 2 meses com FC registrada)</p>';
+      }
+    }catch(err){
+      console.error('Zone chart error:',err);
+      ze.parentElement.innerHTML='<p style="font-size:12px;color:var(--re);padding:20px 0">Erro: '+err.message+'</p>';
+    }
   }
 
-  // Drift chart for long runs
+  // ── Cardiac drift chart ───────────────────────────────────────────────────
   const de=document.getElementById('cd');
   if(de){
-    const drifts=s.driftData;
-    if(DC)DC.destroy();
-    DC=new Chart(de,{type:'line',
-      data:{labels:drifts.map(d=>d.date),datasets:[
-        {label:'FC drift',data:drifts.map(d=>d.drift),borderColor:'#f87171',backgroundColor:'rgba(248,113,113,0.08)',borderWidth:2,pointRadius:4,pointBackgroundColor:'#f87171',fill:true,tension:0.3},
-        {label:'Pace',data:drifts.map(d=>d.pace),borderColor:'#4ade80',backgroundColor:'transparent',borderWidth:1.5,borderDash:[4,3],pointRadius:3,pointBackgroundColor:'#4ade80',yAxisID:'yP',tension:0.3}
-      ]},
-      options:{responsive:true,maintainAspectRatio:false,
-        plugins:{legend:{labels:{color:'#8a9189',font:{size:10,family:'DM Mono'},boxWidth:10,padding:12}},
-          tooltip:{...tt,callbacks:{label:c=>c.dataset.label==='FC drift'?'Drift: '+(c.parsed.y*100-100).toFixed(1)+'% acima avg':('Pace: '+ps(c.parsed.y)+'/km')}}},
-        scales:{
-          y:{min:1.03,max:1.15,ticks:{...tc,callback:v=>'+'+((v-1)*100).toFixed(0)+'%'},grid:{color:gclr},border:{display:false}},
-          yP:{position:'right',reverse:true,min:4.9,max:5.7,ticks:{...tc,callback:v=>ps(v)},grid:{display:false},border:{display:false}},
-          x:{ticks:{...tc,maxRotation:45},grid:{display:false},border:{display:false}}
-        }}});
+    try{
+      const driftRuns=RUNS.filter(r=>r.dist_km>=14&&r.hr_max>0&&r.hr_avg>0&&r.pace_min_km>3.5&&r.pace_min_km<8).slice(-12);
+      
+      if(driftRuns.length>=3){
+        if(DC)DC.destroy();
+        DC=new Chart(de,{
+          type:'line',
+          data:{
+            labels:driftRuns.map(r=>r.date.slice(5)),
+            datasets:[
+              {label:'Drift FC (%)',data:driftRuns.map(r=>parseFloat(((r.hr_max/r.hr_avg-1)*100).toFixed(1))),
+                borderColor:'#f87171',backgroundColor:'rgba(248,113,113,0.08)',borderWidth:2,
+                pointRadius:4,pointBackgroundColor:'#f87171',fill:true,tension:0.3,yAxisID:'yD'},
+              {label:'Pace',data:driftRuns.map(r=>r.pace_min_km),
+                borderColor:'#4ade80',backgroundColor:'transparent',borderWidth:1.5,
+                borderDash:[4,3],pointRadius:3,pointBackgroundColor:'#4ade80',tension:0.3,yAxisID:'yP'}
+            ]
+          },
+          options:{
+            responsive:true,maintainAspectRatio:false,
+            plugins:{
+              legend:{display:true,position:'top',labels:{color:'#8a9189',font:{size:10,family:'DM Mono'},boxWidth:10,padding:10,usePointStyle:true}},
+              tooltip:{...tt,callbacks:{label:c=>c.dataset.yAxisID==='yD'?'  Drift: +'+c.parsed.y.toFixed(1)+'%':'  Pace: '+ps(c.parsed.y)+'/km'}}
+            },
+            scales:{
+              yD:{position:'left',min:3,max:14,ticks:{...tc,callback:v=>'+'+v+'%'},grid:{color:gclr},border:{display:false}},
+              yP:{position:'right',reverse:true,min:4.9,max:5.8,ticks:{...tc,callback:v=>ps(v)},grid:{display:false},border:{display:false}},
+              x:{ticks:{...tc,maxRotation:45},grid:{display:false},border:{display:false}}
+            }
+          }
+        });
+      } else {
+        de.parentElement.innerHTML='<p style="font-size:12px;color:var(--t3);padding:20px 0;text-align:center">Dados insuficientes para gráfico de drift</p>';
+      }
+    }catch(err){
+      console.error('Drift chart error:',err);
+      de.parentElement.innerHTML='<p style="font-size:12px;color:var(--re);padding:20px 0">Erro: '+err.message+'</p>';
+    }
   }
 }
 
@@ -385,7 +463,7 @@ function rdDash(){
   const el=document.getElementById('dc');
   const s=stats();
   const vts=s.vt>0?'↑ +'+s.vt.toFixed(0)+'%':s.vt<0?'↓ '+s.vt.toFixed(0)+'%':'estável';
-  const pd=du('2026-05-25'),ad=du('2026-10-18');
+  const pd=du('2026-05-30'),ad=du('2026-10-18');
   const lbl=t=>({interval:'Tiro',progressive:'Progressivo',long:'Longão',easy:'Rodagem'})[t];
   const clr=t=>({interval:'#a78bfa',progressive:'#fbbf24',long:'#4ade80',easy:'#4d5a4d'})[t];
   el.innerHTML=`
@@ -406,7 +484,7 @@ function rdDash(){
         ${Object.entries(s.sct).map(([t,n])=>'<div class="sbr"><div class="sbh"><span style="font-size:11px;color:'+clr(t)+';font-family:var(--mono)">'+lbl(t)+'</span><span class="mu" style="font-size:11px">'+n+' ('+Math.round(n/s.tot*100)+'%)</span></div><div class="sbbg"><div class="sbf" style="width:'+Math.round(n/s.tot*100)+'%;background:'+clr(t)+'"></div></div></div>').join('')}
       </div>
     </div>
-    <div class="cd" style="margin-top:0"><div class="ct">Evolução do pace por zona de FC<div style="display:flex;gap:12px"><span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)"><span style="width:8px;height:3px;background:#4ade80;display:inline-block;border-radius:1px"></span>Z2 ≤162</span><span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)"><span style="width:8px;height:3px;background:#fbbf24;display:inline-block;border-radius:1px"></span>Z3 163-170</span><span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)"><span style="width:8px;height:3px;background:#f87171;display:inline-block;border-radius:1px"></span>Z4 171-177</span></div></div><p style="font-size:11px;color:var(--t3);font-family:var(--mono);margin:-8px 0 10px">Se o pace melhora mantendo a mesma zona → forma crescendo</p><div style="height:200px"><canvas id="cz"></canvas></div></div>
+    <div class="cd" style="margin-top:0"><div class="ct">Evolução do pace por zona de FC<div style="display:flex;gap:12px"><span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)"><span style="width:8px;height:3px;background:#4ade80;display:inline-block;border-radius:1px"></span>Facil &lt;163</span><span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)"><span style="width:8px;height:3px;background:#fbbf24;display:inline-block;border-radius:1px"></span>Moderado 163-170</span><span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)"><span style="width:8px;height:3px;background:#f87171;display:inline-block;border-radius:1px"></span>Forte 171+</span></div></div><p style="font-size:11px;color:var(--t3);font-family:var(--mono);margin:-8px 0 10px">Se o pace melhora mantendo a mesma zona → forma crescendo</p><div style="height:200px"><canvas id="cz"></canvas></div></div>
     <div class="cd" style="margin-top:14px"><div class="ct">Fadiga nos longões — drift FC (FC max / FC avg)<div style="display:flex;gap:12px"><span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)"><span style="width:8px;height:3px;background:#f87171;display:inline-block;border-radius:1px"></span>Drift</span><span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)"><span style="width:8px;height:3px;background:#4ade80;border-top:1px dashed #4ade80;display:inline-block"></span>Pace</span></div></div><p style="font-size:11px;color:var(--t3);font-family:var(--mono);margin:-8px 0 10px">Drift menor = coração menos sobrecarregado = mais eficiente</p><div style="height:160px"><canvas id="cd"></canvas></div></div>
     <div class="cd" style="margin-top:14px"><div class="ct">Últimas corridas</div>
       <table class="rt"><thead><tr><th>Data</th><th>Tipo</th><th>Nome</th><th style="text-align:right">km</th><th style="text-align:right">Pace</th><th style="text-align:right">FC</th></tr></thead>
@@ -445,31 +523,64 @@ function rdStr(){
 
 function md2html(text){
   if(!text)return'';
-  return text
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
-    .replace(/^#{1,3}\s+(.+)$/gm,'<p style="font-size:14px;font-weight:500;color:var(--t1);margin:14px 0 6px">$1</p>')
-    .replace(/^\d+\.\s+(.+)$/gm,'<div style="display:flex;gap:8px;margin-bottom:6px"><span style="color:var(--gr);font-weight:500;flex-shrink:0">→</span><span>$1</span></div>')
-    .replace(/^[-•]\s+(.+)$/gm,'<div style="display:flex;gap:8px;margin-bottom:4px"><span style="color:var(--t3);flex-shrink:0">·</span><span>$1</span></div>')
-    .replace(/\n\n/g,'</p><p style="margin:0 0 10px">')
+  // Handle markdown tables
+  function parseTable(block){
+    const rows=block.trim().split('\n').filter(r=>r.includes('|'));
+    if(rows.length<2)return block;
+    let html='<div style="overflow-x:auto;margin:12px 0"><table style="width:100%;border-collapse:collapse;font-size:12px;font-family:var(--mono)">';
+    rows.forEach((row,i)=>{
+      if(row.match(/^\s*\|[-: |]+\|\s*$/))return; // skip separator
+      const cells=row.split('|').map(c=>c.trim()).filter((_,j,a)=>j>0&&j<a.length-1);
+      const tag=i===0?'th':'td';
+      html+='<tr>'+cells.map(c=>`<${tag} style="padding:6px 10px;border:.5px solid var(--b1);${i===0?'color:var(--t3);font-weight:400;text-transform:uppercase;letter-spacing:.05em':'color:var(--t1)'}">${c}</${tag}>`).join('')+'</tr>';
+    });
+    return html+'</table></div>';
+  }
+  // Replace table blocks first
+  let result=text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  // Find table blocks (lines with |)
+  result=result.replace(/((?:^[^\n]*\|[^\n]*\n?)+)/gm,m=>{
+    if(m.includes('|')&&m.split('\n').filter(l=>l.includes('|')).length>=2)return parseTable(m);
+    return m;
+  });
+  return result
+    .replace(/\*\*([^*]+)\*\*/g,'<strong style="color:var(--t1)">$1</strong>')
+    .replace(/^#{1,3}\s+(.+)$/gm,'<p style="font-size:14px;font-weight:500;color:var(--t1);margin:16px 0 6px;padding-top:8px;border-top:.5px solid var(--b1)">$1</p>')
+    .replace(/^\d+\.\s+(.+)$/gm,'<div style="display:flex;gap:8px;margin:8px 0 4px"><span style="color:var(--gr);font-weight:500;flex-shrink:0;min-width:16px">→</span><span>$1</span></div>')
+    .replace(/^[-•]\s+(.+)$/gm,'<div style="display:flex;gap:8px;margin-bottom:3px"><span style="color:var(--t3);flex-shrink:0">·</span><span>$1</span></div>')
+    .replace(/\n{2,}/g,'<br><br>')
     .replace(/\n/g,'<br>');
 }
 
 function buildRacePrediction(text){
-  // Extract time predictions from analysis text
-  const hmMatch=text.match(/1:[3-4]\d(?::[0-5]\d)?/g);
-  const maMatch=text.match(/3:[3-5]\d(?::[0-5]\d)?/g)||text.match(/4:[0-1]\d(?::[0-5]\d)?/g);
-  const hmTime=hmMatch?hmMatch[0]:'1:40';
-  const maTime=maMatch?maMatch[0]:'3:50';
-  return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px 0">'
+  // Extract HM times - look for patterns like 1:38, 1:39, 1:40, 1:41, 1:42, 1:43
+  const hmTimes=text.match(/1:[3-4][0-9](?::[0-5][0-9])?/g)||[];
+  const maTimes=text.match(/[34]:[0-5][0-9](?::[0-5][0-9])?/g)||[];
+  // Filter out HM times from marathon matches
+  const maOnly=maTimes.filter(t=>!t.startsWith('1:'));
+  const hmReal=hmTimes.length>=2?hmTimes[Math.floor(hmTimes.length/2)]:hmTimes[0]||'1:40';
+  const maReal=maOnly.length>=2?maOnly[Math.floor(maOnly.length/2)]:maOnly[0]||'3:50';
+  const hmCons=hmTimes.length>0?hmTimes[hmTimes.length-1]:hmReal;
+  const hmBest=hmTimes.length>0?hmTimes[0]:hmReal;
+  const maCons=maOnly.length>0?maOnly[maOnly.length-1]:maReal;
+  const maBest=maOnly.length>0?maOnly[0]:maReal;
+  const dPOA=Math.ceil((new Date('2026-05-30T07:00:00')-new Date())/864e5);
+  return '<div style="margin:16px 0 20px">'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
     +'<div style="background:var(--grA);border:.5px solid var(--gr2);border-radius:10px;padding:14px 16px">'
-    +'<p style="font-size:10px;font-family:var(--mono);color:var(--gr);text-transform:uppercase;letter-spacing:.07em;margin:0 0 6px">Meia · POA</p>'
-    +'<p style="font-size:32px;font-weight:300;letter-spacing:-.02em;color:var(--gr);margin:0;line-height:1">'+hmTime+'</p>'
-    +'<p style="font-size:11px;color:var(--gr2);margin:5px 0 0;font-family:var(--mono)">projeção realista</p></div>'
+    +'<p style="font-size:10px;font-family:var(--mono);color:var(--gr);text-transform:uppercase;letter-spacing:.07em;margin:0 0 4px">Meia · POA · 30/mai</p>'
+    +'<p style="font-size:30px;font-weight:300;letter-spacing:-.02em;color:var(--gr);margin:0;line-height:1">'+hmReal+'</p>'
+    +'<p style="font-size:11px;color:var(--gr2);margin:5px 0 0;font-family:var(--mono)">'+dPOA+' dias · realista</p></div>'
     +'<div style="background:var(--puA);border:.5px solid #6d28d9;border-radius:10px;padding:14px 16px">'
-    +'<p style="font-size:10px;font-family:var(--mono);color:var(--pu);text-transform:uppercase;letter-spacing:.07em;margin:0 0 6px">Maratona · Amsterdam</p>'
-    +'<p style="font-size:32px;font-weight:300;letter-spacing:-.02em;color:var(--pu);margin:0;line-height:1">'+maTime+'</p>'
-    +'<p style="font-size:11px;color:#7c3aed;margin:5px 0 0;font-family:var(--mono)">projeção realista</p></div>'
+    +'<p style="font-size:10px;font-family:var(--mono);color:var(--pu);text-transform:uppercase;letter-spacing:.07em;margin:0 0 4px">Maratona · Amsterdam</p>'
+    +'<p style="font-size:30px;font-weight:300;letter-spacing:-.02em;color:var(--pu);margin:0;line-height:1">'+maReal+'</p>'
+    +'<p style="font-size:11px;color:#7c3aed;margin:5px 0 0;font-family:var(--mono)">out/2026 · realista</p></div>'
+    +'</div>'
+    +'<div style="background:var(--bg3);border-radius:8px;padding:10px 14px;font-size:11px;font-family:var(--mono);display:grid;grid-template-columns:auto 1fr 1fr 1fr;gap:6px 16px;align-items:center">'
+    +'<span style="color:var(--t3)">PROVA</span><span style="color:var(--t3)">CONSERVADOR</span><span style="color:var(--t3)">REALISTA</span><span style="color:var(--t3)">DIA PERFEITO</span>'
+    +'<span style="color:var(--t2)">Meia POA</span><span style="color:var(--t1)">'+hmCons+'</span><span style="color:var(--gr);font-weight:500">'+hmReal+'</span><span style="color:var(--t1)">'+hmBest+'</span>'
+    +'<span style="color:var(--t2)">Maratona</span><span style="color:var(--t1)">'+maCons+'</span><span style="color:var(--pu);font-weight:500">'+maReal+'</span><span style="color:var(--t1)">'+maBest+'</span>'
+    +'</div>'
     +'</div>';
 }
 function rdAna(){
@@ -510,24 +621,40 @@ async function runAnalysis(){
   const _zs=s.zoneData;
   const _zoneSummary=Object.keys(_zs).sort().map(m=>{
     const z=_zs[m];
-    return m+': '+Object.entries(z).map(([k,v])=>k+' -> '+ps(v)+'/km').join(', ');
+    return m+': '+Object.entries(z).map(([k,v])=>k+'->'+ps(v)+'/km').join(', ');
   }).join(' | ');
-  const _driftSummary=s.driftData.map(d=>'longão '+d.date+' pace '+ps(d.pace)+'/km drift '+(((d.drift-1)*100).toFixed(1))+'%').join(' | ');
+  const _driftSummary=s.driftData.map(d=>'longao '+d.date+' pace '+ps(d.pace)+'/km drift '+(((d.drift-1)*100).toFixed(1))+'%').join(' | ');
+
+  // Today's date and day of week for accurate training recommendations
+  const today=new Date();
+  const todayStr=today.toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  const daysUntilPOA=Math.ceil((new Date('2026-05-30T07:00:00')-today)/864e5);
+
   const prompt='Você é um treinador de corrida especialista. Analise com foco em evolução real de performance.\n\n'
-    +'ATLETA: PR meia 1:43 (4:50/km FC174, POA jun/2025)\n'
-    +'METAS: Meia POA fim mai/2026 | Maratona Amsterdam out/2026\n'
-    +'ESTRUTURA: tiros/progressivos Ter+Qui, longão fim de semana\n\n'
-    +'PACE POR ZONA DE FC (evolucao mensal):\n'+_zoneSummary+'\n\n'
-    +'DRIFT CARDÍACO NOS LONGOES (FC max/avg - 1 = fadiga durante o treino):\n'+_driftSummary+'\n\n'
-    +'ULTIMAS '+l90.length+' CORRIDAS:\n'+lines+'\n\n'
-    +'RESUMO: '+s.ints.length+' tiros | '+s.prgs.length+' progressivos | '+s.v30.toFixed(0)+'km/mes'
+    +'DATA DE HOJE: '+todayStr+' ('+daysUntilPOA+' dias até a Meia de POA)\n\n'
+    +'ATLETA: PR atual = Meia Maratona POA junho 2025\n'
+    +'  Distancia: 21.4km | Tempo: 1:43 | Pace: 4:50/km | FC media: 174 bpm | FC max: ~184 bpm\n'
+    +'  Drift cardíaco na prova: ~+6% (FC max/avg)\n\n'
+    +'METAS: Meia POA 30 mai 2026 | Maratona Amsterdam out 2026\n'
+    +'ESTRUTURA: tiros/progressivos Ter+Qui, longao fim de semana\n\n'
+    +'PACE POR ZONA DE FC - treinos atuais (ultimos 6 meses, por mes):\n'+_zoneSummary+'\n\n'
+    +'DRIFT CARDÍACO NOS LONGOES atuais:\n'+_driftSummary+'\n\n'
+    +'ULTIMAS '+l90.length+' CORRIDAS (90 dias):\n'+lines+'\n\n'
+    +'RESUMO ATUAL: '+s.ints.length+' tiros | '+s.prgs.length+' progressivos | '+s.v30.toFixed(0)+'km/mes'
     +(s.ll?' | ultimo longao: '+s.ll.dist_km.toFixed(1)+'km '+ps(s.ll.pace_min_km)+'/km FC'+Math.round(s.ll.hr_avg):'')
     +(s.bp?' | melhor progressivo: '+ps(s.bp)+'/km':'')
-    +'\n\nResponda em portugues, SEM codigo, texto limpo com **negrito** para destaques:\n'
-    +'1. **Eficiencia FC vs pace** — analise a evolucao por zona (Z2/Z3/Z4), o drift cardíaco nos longoes, o que isso significa para a forma atual\n'
-    +'2. **Projecao Meia POA** — 3 cenarios (conservador/realista/dia perfeito) com tempo e pace alvo. Inclua os tempos no formato 1:XX\n'
-    +'3. **Projecao Maratona Amsterdam** — tempo estimado (formato 3:XX ou 4:XX) e o principal ajuste de treino necessario\n'
-    +'4. **Proximos 2 treinos** — sessoes concretas com distancia, pace alvo e FC alvo';
+    +'\n\nResponda em portugues, texto limpo com **negrito** para destaques. ESTRUTURA OBRIGATORIA:\n\n'
+    +'1. **Comparacao FC: treinos longos atuais vs prova PR (POA 2025)**\n'
+    +'   Compare as zonas de FC e drift dos longoes atuais com os dados da prova de PR.\n'
+    +'   O que melhorou? O que isso significa para o pace sustentavel na proxima prova?\n\n'
+    +'2. **Tabela de ritmos previstos** (formato markdown de tabela)\n'
+    +'   | Prova | Conservador | Realista | Dia perfeito |\n'
+    +'   | Meia POA (30/mai) | X:XX (X:XX/km) | X:XX (X:XX/km) | X:XX (X:XX/km) |\n'
+    +'   | Maratona Amsterdam | X:XX (X:XX/km) | X:XX (X:XX/km) | X:XX (X:XX/km) |\n\n'
+    +'3. **Proximo treino de qualidade** (considere que hoje é '+todayStr+')\n'
+    +'   Qual o proximo dia de treino de qualidade e o que fazer. Seja especifico: distancia, pace alvo, FC alvo.\n\n'
+    +'4. **Foco das proximas 2 semanas ate a prova**\n'
+    +'   Orientacoes gerais de taper considerando '+daysUntilPOA+' dias ate a prova.';
   try{
     const res=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
