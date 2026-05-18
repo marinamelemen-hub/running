@@ -313,7 +313,7 @@ function showReconnectBanner(){
     +'<p style="font-size:12px;color:#8a9189;margin:0">Execute o <strong style="color:#e8ebe8">strava_connect.py</strong> novamente e cole os tokens na aba Configurações</p>'
     +'</div>'
     +'<div style="display:flex;gap:8px;flex-shrink:0">'
-    +'<button onclick="showTab('str',document.querySelectorAll('.tab')[2]);document.getElementById('reconnect-banner').remove()" style="background:#FC4C02;border:none;color:#fff;padding:8px 16px;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer">Ir para Configurações</button>'
+    +'<button onclick="document.getElementById(\'reconnect-banner\').remove();showTab(\'str\',document.querySelectorAll(\'.tab\')[2])" style="background:#FC4C02;border:none;color:#fff;padding:8px 16px;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer">Ir para Configurações</button>'
     +'<button onclick="this.parentElement.parentElement.remove()" style="background:transparent;border:.5px solid #4d5a4d;color:#8a9189;padding:8px 14px;border-radius:8px;font-size:12px;cursor:pointer">✕</button>'
     +'</div>';
   document.body.appendChild(banner);
