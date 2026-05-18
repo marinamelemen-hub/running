@@ -225,8 +225,10 @@ function saveTokens(){
   const cid=(document.getElementById('icid')||{value:''}).value.trim();
   const cs=(document.getElementById('ics')||{value:''}).value.trim();
   if(!at){toast('Cole o Access Token primeiro',true);return;}
+  // Strava tokens expire in 6h; refresh token is long-lived
   sc2({at,rt:rt||'manual',exp:Math.floor(Date.now()/1000)+21600,cid,cs});
-  toast('Tokens Strava salvos!');render();
+  toast('Tokens salvos! Sync automático enquanto o token for válido.');
+  render();
 }
 function saveKey(){
   const k=(document.getElementById('ikey')||{value:''}).value.trim();
@@ -236,37 +238,85 @@ function saveKey(){
 }
 async function tryRefresh(){
   const c=gc();
-  if(!c.rt||c.rt==='manual'||!c.cid||!c.cs)throw new Error('Token expirado. Cole um novo Access Token na aba Strava.');
-  const body=JSON.stringify({client_id:c.cid,client_secret:c.cs,refresh_token:c.rt,grant_type:'refresh_token'});
-  for(const u of['https://corsproxy.io/?url='+encodeURIComponent('https://www.strava.com/oauth/token'),'https://api.allorigins.win/raw?url='+encodeURIComponent('https://www.strava.com/oauth/token')]){
-    try{const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body,signal:AbortSignal.timeout(7000)});
-    if(r.ok){const d=await r.json();if(d.access_token){sc2({at:d.access_token,rt:d.refresh_token||c.rt,exp:d.expires_at,cid:c.cid,cs:c.cs});return d.access_token;}}}catch(e){}
-  }
-  throw new Error('Token expirado. Cole um novo Access Token na aba Configurações.');
+  if(!c.rt||c.rt==='manual'||!c.cid||!c.cs) throw new Error('NEEDS_RECONNECT');
+  const body=JSON.stringify({client_id:c.cid,client_secret:c.cs,refresh_token:c.rt});
+  const opts={method:'POST',headers:{'Content-Type':'application/json'},body};
+  // Netlify serverless function — sem CORS, funciona sempre
+  try{
+    const r=await fetch('/.netlify/functions/refresh',{...opts,signal:AbortSignal.timeout(8000)});
+    if(r.ok){const d=await r.json();if(d.access_token){sc2({at:d.access_token,rt:d.refresh_token||c.rt,exp:d.expires_at,cid:c.cid,cs:c.cs});return d.access_token;}}
+  }catch(e){console.error('Netlify refresh error:',e);}
+  throw new Error('NEEDS_RECONNECT');
 }
+
 async function getToken(){
-  const c=gc();if(!c.at)throw new Error('Configure o Strava nas Configurações.');
-  if(Date.now()/1000<c.exp-120)return c.at;
+  const c=gc();
+  if(!c.at) throw new Error('NEEDS_RECONNECT');
+  if(Date.now()/1000<c.exp-60) return c.at;
   return tryRefresh();
 }
+
 async function stravaSync(){
   toast('Sincronizando...');
   try{
-    const token=await getToken();
+    let token;
+    try{ token=await getToken(); }
+    catch(e){
+      if(e.message==='NEEDS_RECONNECT'||e.message.includes('401')){showReconnectBanner();return;}
+      throw e;
+    }
     const lastDate=RUNS.length?RUNS.at(-1).date:'2020-01-01';
     const after=Math.floor(new Date(lastDate+'T00:00:00').getTime()/1000);
     const res=await fetch('https://www.strava.com/api/v3/athlete/activities?after='+after+'&per_page=50',{headers:{Authorization:'Bearer '+token}});
-    if(!res.ok)throw new Error('Erro Strava '+res.status);
-    const acts=await res.json();
-    const newRuns=acts.filter(a=>a.type==='Run'||a.sport_type==='Run').map(a=>{
-      const date=a.start_date_local.split('T')[0];const dk=a.distance/1000,ms=a.moving_time;
-      const run={date,name:a.name||'',dist_km:dk,moving_sec:ms,pace_min_km:ms>0&&dk>0?(ms/60)/dk:0,hr_avg:a.average_heartrate||0,hr_max:a.max_heartrate||0,weekday:new Date(date+'T12:00:00').getDay()};
-      run.type=cls(run);return run;
-    });
-    const added=merge(newRuns);
-    toast('✓ +'+added+' corrida'+(added!==1?'s':'')+'. Total: '+RUNS.length+'.');
-    render();
-  }catch(e){toast('Erro: '+e.message,true);}
+    if(res.status===401){
+      // Token expired mid-session, try refresh once
+      try{
+        token=await tryRefresh();
+        const res2=await fetch('https://www.strava.com/api/v3/athlete/activities?after='+after+'&per_page=50',{headers:{Authorization:'Bearer '+token}});
+        if(!res2.ok) throw new Error('401');
+        const acts=await res2.json();
+        processActivities(acts);
+      }catch(e){ showReconnectBanner(); return; }
+    } else if(!res.ok){
+      throw new Error('Erro Strava '+res.status);
+    } else {
+      const acts=await res.json();
+      processActivities(acts);
+    }
+  }catch(e){
+    if(e.message==='NEEDS_RECONNECT'||e.message.includes('401')){ showReconnectBanner(); return; }
+    toast('Erro: '+e.message,true);
+  }
+}
+
+function processActivities(acts){
+  const newRuns=acts.filter(a=>a.type==='Run'||a.sport_type==='Run').map(a=>{
+    const date=a.start_date_local.split('T')[0];const dk=a.distance/1000,ms=a.moving_time;
+    const run={date,name:a.name||'',dist_km:dk,moving_sec:ms,pace_min_km:ms>0&&dk>0?(ms/60)/dk:0,hr_avg:a.average_heartrate||0,hr_max:a.max_heartrate||0,weekday:new Date(date+'T12:00:00').getDay(),strava_id:a.id};
+    run.type=cls(run);return run;
+  });
+  const added=merge(newRuns);
+  toast('✓ +'+added+' corrida'+(added!==1?'s':'')+'. Total: '+RUNS.length+'.');
+  render();
+}
+
+function showReconnectBanner(){
+  // Remove existing banner if any
+  const old=document.getElementById('reconnect-banner');
+  if(old)old.remove();
+  const banner=document.createElement('div');
+  banner.id='reconnect-banner';
+  banner.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#1a0a00;border-top:.5px solid #FC4C02;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;z-index:999;flex-wrap:wrap';
+  banner.innerHTML=
+    '<div>'
+    +'<p style="font-size:13px;font-weight:500;color:#FC4C02;margin:0 0 2px">Token do Strava expirou</p>'
+    +'<p style="font-size:12px;color:#8a9189;margin:0">Execute o <strong style="color:#e8ebe8">strava_connect.py</strong> novamente e cole os tokens na aba Configurações</p>'
+    +'</div>'
+    +'<div style="display:flex;gap:8px;flex-shrink:0">'
+    +'<button onclick="showTab('str',document.querySelectorAll('.tab')[2]);document.getElementById('reconnect-banner').remove()" style="background:#FC4C02;border:none;color:#fff;padding:8px 16px;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer">Ir para Configurações</button>'
+    +'<button onclick="this.parentElement.parentElement.remove()" style="background:transparent;border:.5px solid #4d5a4d;color:#8a9189;padding:8px 14px;border-radius:8px;font-size:12px;cursor:pointer">✕</button>'
+    +'</div>';
+  document.body.appendChild(banner);
 }
 function doExchange(){}
 function disconnectStrava(){['s_cid','s_cs','s_at','s_rt','s_exp'].forEach(k=>localStorage.removeItem(k));toast('Strava desconectado.');render();}
