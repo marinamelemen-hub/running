@@ -543,6 +543,14 @@ function rdDash(){
   requestAnimationFrame(()=>buildCharts(s));
 }
 
+
+function getStravaAuthUrl(){
+  const c=gc();
+  if(!c.cid) return null;
+  const state=btoa(JSON.stringify({cid:c.cid,cs:c.cs}));
+  const redirect=encodeURIComponent(window.location.origin+'/.netlify/functions/callback');
+  return 'https://www.strava.com/oauth/authorize?client_id='+c.cid+'&redirect_uri='+redirect+'&response_type=code&scope=activity:read_all&approval_prompt=auto&state='+state;
+}
 function rdStr(){
   const el=document.getElementById('sc');if(!el)return;
   const c=gc(),conn=!!(c.at&&c.at.length>10);
@@ -559,7 +567,8 @@ function rdStr(){
     +'<div style="margin-bottom:8px"><div class="fi"><label>Access Token</label><input id="iat" type="text" placeholder="Cole o Access Token" value="'+(c.at||'')+'" style="width:100%"></div></div>'
     +'<div style="margin-bottom:8px"><div class="fi"><label>Refresh Token</label><input id="irt" type="text" placeholder="Cole o Refresh Token" value="'+(c.rt&&c.rt!=="manual"?c.rt:'')+'" style="width:100%"></div></div>'
     +'<div class="fg" style="margin-bottom:10px"><div class="fi"><label>Client ID</label><input id="icid" type="text" placeholder="235985" value="'+(c.cid||'')+'"></div><div class="fi"><label>Client Secret</label><input id="ics" type="password" placeholder="8764210d..." value="'+(c.cs||'')+'"></div></div>'
-    +'<button onclick="saveTokens()" style="background:#1D9E75;border:none;color:#fff;padding:9px 20px;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;width:100%;margin-bottom:16px">Salvar tokens Strava</button>'
+    +'<button onclick="saveTokens()" style="background:#1D9E75;border:none;color:#fff;padding:9px 20px;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;width:100%;margin-bottom:10px">Salvar tokens Strava</button>'
+    +'<button onclick="var u=getStravaAuthUrl();if(u)window.location=u;else toast(\'Insira o Client ID primeiro\',true)" style="background:#FC4C02;border:none;color:#fff;padding:9px 20px;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;width:100%;margin-bottom:16px">🔗 Conectar Strava automaticamente</button>'
 
     +'<p style="font-size:12px;font-weight:500;margin-bottom:6px">Chave API Claude '+(ak?'<span style="color:var(--gr);font-weight:400">● configurada</span>':'<span style="color:var(--t3);font-weight:400">não configurada</span>')+'</p>'
     +'<p style="font-size:12px;color:var(--t2);margin-bottom:8px;line-height:1.5">Acesse <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:var(--gr)">console.anthropic.com</a> → API Keys → Create Key</p>'
@@ -723,6 +732,21 @@ async function runAnalysis(){
 
 function showTab(id,btn){document.querySelectorAll('.pane').forEach(p=>p.classList.remove('on'));document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.getElementById('pane-'+id).classList.add('on');btn.classList.add('on');}
 function toast(msg,err=false){const el=document.getElementById('sb');el.textContent=msg;el.className='sb show '+(err?'err':'ok');clearTimeout(el._t);el._t=setTimeout(()=>el.classList.remove('show'),6000);}
+
+// Check if returning from Strava OAuth
+(function checkOAuth(){
+  const hash = window.location.hash.substring(1);
+  if(!hash) return;
+  const p = new URLSearchParams(hash);
+  const at = p.get('at'), rt = p.get('rt'), exp = p.get('exp'), cid = p.get('cid'), cs = p.get('cs');
+  if(at && rt){
+    sc2({at, rt, exp: parseInt(exp)||Math.floor(Date.now()/1000)+21600, cid:cid||'', cs:cs||''});
+    history.replaceState(null,'',window.location.pathname);
+    setTimeout(()=>{toast('✓ Strava conectado!');stravaSync();}, 600);
+  }
+  const err = new URLSearchParams(window.location.search).get('strava_error');
+  if(err){ setTimeout(()=>toast('Erro Strava: '+err, true), 600); history.replaceState(null,'',window.location.pathname); }
+})();
 
 load();
 render();
