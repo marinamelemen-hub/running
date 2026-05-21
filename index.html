@@ -42,7 +42,7 @@ body{background:var(--bg);color:var(--t1);font-family:var(--sans);font-size:14px
 .rcg .rd{color:var(--gr)}.rcp .rd{color:var(--pu);}
 .rs{font-size:11px;margin-top:6px;}
 .rcg .rs{color:#4ade8077}.rcp .rs{color:#a78bfa77;}
-.kg{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px;}
+.kg{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px;}
 .kpi{background:var(--bg2);border:.5px solid var(--b1);border-radius:10px;padding:14px 16px;}
 .kl{font-size:10px;font-family:var(--mono);color:var(--t3);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px;}
 .kv{font-size:24px;font-weight:400;letter-spacing:-.02em;line-height:1.1;}
@@ -325,6 +325,88 @@ function disconnectStrava(){['s_cid','s_cs','s_at','s_rt','s_exp'].forEach(k=>lo
 
 function last(days){const c=new Date();c.setDate(c.getDate()-days);return RUNS.filter(r=>new Date(r.date)>=c);}
 
+
+// ── Phase 1 Performance Metrics ─────────────────────────────────────────────
+const PR_VDOT = 43.60;
+const PR_HM_MIN = 103;  // 1:43:00
+
+function getHRThresh(){ return parseFloat(localStorage.getItem('hr_threshold')||'174'); }
+
+function calcHRTSS(movSec, hrAvg){
+  const thresh = getHRThresh();
+  if(!hrAvg||!movSec) return 0;
+  return (movSec/3600) * Math.pow(hrAvg/thresh, 2) * 100;
+}
+
+function vdotFromRace(distM, tMin){
+  const v = distM/tMin;
+  const vo2 = -4.60 + 0.182258*v + 0.000104*v*v;
+  const pmax = 0.8 + 0.1894393*Math.exp(-0.012778*tMin) + 0.2989558*Math.exp(-0.1932605*tMin);
+  return Math.max(0, vo2/pmax);
+}
+
+function predictRaceTime(vdot, distM){
+  let lo=1,hi=600;
+  for(let i=0;i<60;i++){
+    const mid=(lo+hi)/2;
+    const v=distM/mid;
+    const vo2=-4.60+0.182258*v+0.000104*v*v;
+    const pmax=0.8+0.1894393*Math.exp(-0.012778*mid)+0.2989558*Math.exp(-0.1932605*mid);
+    if(vo2/pmax<vdot) hi=mid; else lo=mid;
+  }
+  return (lo+hi)/2;
+}
+
+function fmtRaceTime(tMin){
+  const h=Math.floor(tMin/60), m=Math.floor(tMin%60), s=Math.round((tMin%1)*60);
+  return h>0?`${h}:${String(m).padStart(2,'0')}`:String(m)+':'+String(s).padStart(2,'0');
+}
+
+function computeFormMetrics(){
+  const thresh = getHRThresh();
+  const daily = {};
+  RUNS.forEach(r=>{
+    if(r.hr_avg>0&&r.moving_sec>0){
+      daily[r.date]=(daily[r.date]||0)+(r.moving_sec/3600)*Math.pow(r.hr_avg/thresh,2)*100;
+    }
+  });
+  const ctlK=1-Math.exp(-1/42), atlK=1-Math.exp(-1/7);
+  let ctl=0,atl=0;
+  const results=[];
+  const startDate=new Date('2017-08-01');
+  const endDate=new Date();
+  for(let d=new Date(startDate);d<=endDate;d.setDate(d.getDate()+1)){
+    const ds=d.toISOString().split('T')[0];
+    const tss=daily[ds]||0;
+    ctl+=ctlK*(tss-ctl); atl+=atlK*(tss-atl);
+    results.push({date:ds,ctl:Math.round(ctl*10)/10,atl:Math.round(atl*10)/10,tsb:Math.round((ctl-atl)*10)/10,tss:Math.round(tss*10)/10});
+  }
+  return results;
+}
+
+function getFormSummary(){
+  const fm = computeFormMetrics();
+  const today = fm.at(-1);
+  const peak_ctl = Math.max(...fm.map(m=>m.ctl));
+  const last180 = fm.slice(-180);
+  
+  // Training VDOT trend (sessions > 8km, pace < 5:30, hr > 155)
+  const tvdots = RUNS.filter(r=>r.dist_km>=8&&r.pace_min_km>3&&r.pace_min_km<5.5&&r.hr_avg>=155&&r.moving_sec>0)
+    .map(r=>({date:r.date,vdot:Math.round(vdotFromRace(r.dist_km*1000,r.moving_sec/60)*10)/10,type:r.type}))
+    .filter(v=>v.vdot>30);
+  
+  // Monthly avg training VDOT
+  const byMonth = {};
+  tvdots.forEach(v=>{
+    const m=v.date.slice(0,7);
+    if(!byMonth[m]) byMonth[m]=[];
+    byMonth[m].push(v.vdot);
+  });
+  
+  return {today, peak_ctl, last180, tvdots: tvdots.slice(-20),
+    monthly_vdot: Object.entries(byMonth).map(([m,vs])=>({month:m,avg:Math.round(vs.reduce((a,b)=>a+b,0)/vs.length*10)/10})).slice(-6)};
+}
+
 function stats(){
   const l90=last(90),l30=last(30);
   const l30p=RUNS.filter(r=>{const c=new Date();c.setDate(c.getDate()-60);const c2=new Date();c2.setDate(c2.getDate()-30);const d=new Date(r.date);return d>=c&&d<c2;});
@@ -359,9 +441,29 @@ function stats(){
   return{l90,v30,v30p,vt:v30p>0?((v30-v30p)/v30p*100):0,lng,ints,prgs,ll:lng.at(-1)||null,li:ints.at(-1)||null,bp,sct,wv,pt,tot:l90.length||1,zoneData,driftData};
 }
 
-let PC=null,VC=null,ZC=null,DC=null;
-function dc2(){[PC,VC,ZC,DC].forEach(c=>{if(c)c.destroy();});PC=VC=ZC=DC=null;}
-function buildCharts(s){
+let PC=null,VC=null,ZC=null,DC=null,FC=null;
+function dc2(){[PC,VC,ZC,DC,FC].forEach(c=>{if(c)c.destroy();});PC=VC=ZC=DC=null;}
+
+function buildKPIs(s, fm){
+  const thresh = getHRThresh();
+  const tsb = fm.today.tsb;
+  const ctl = fm.today.ctl;
+  const tsbColor = tsb>=5&&tsb<=25?'#4ade80':tsb>0?'#fbbf24':'#f87171';
+  const tsbLabel = tsb>=5&&tsb<=25?'janela ideal ✓':tsb>0?'levemente cansada':tsb>-10?'cansada':'muito fadigada';
+  const hmPred = predictRaceTime(PR_VDOT, 21097);
+  const maPred = predictRaceTime(PR_VDOT, 42195);
+  const vts = s.vt>0?'↑ +'+s.vt.toFixed(0)+'%':s.vt<0?'↓ '+s.vt.toFixed(0)+'%':'estável';
+  return [
+    {label:'VDOT',value:PR_VDOT.toFixed(1),sub:'HM '+fmtRaceTime(hmPred)+' · MAR '+fmtRaceTime(maPred)},
+    {label:'CTL (Fitness)',value:ctl.toFixed(0),sub:'pico histórico: '+fm.peak_ctl.toFixed(0)},
+    {label:'TSB (Forma)',value:(tsb>=0?'+':'')+tsb.toFixed(0),sub:tsbLabel,color:tsbColor},
+    {label:'Volume 30d',value:s.v30.toFixed(0)+' km',sub:vts+' vs mês ant.'},
+    {label:'Último longão',value:s.ll?s.ll.dist_km.toFixed(0)+' km':'—',sub:s.ll?ps(s.ll.pace_min_km)+'/km · FC '+Math.round(s.ll.hr_avg||0):'nenhum'},
+    {label:'Tiros 90d',value:s.ints.length,sub:s.li?'último: '+s.li.date.slice(5):'nenhum'},
+  ].map(k=>`<div class="kpi"><div class="kl">${k.label}</div><div class="kv" style="${k.color?'color:'+k.color+';font-size:22px':''}">${k.value}</div><div class="ks">${k.sub}</div></div>`).join('');
+}
+
+function buildCharts(s, fm){
   dc2();
   const tc={font:{size:10,family:'DM Mono'},color:'#4d5a4d'};
   const gclr='rgba(255,255,255,0.04)';
@@ -500,6 +602,38 @@ function buildCharts(s){
       de.parentElement.innerHTML='<p style="font-size:12px;color:var(--re);padding:20px 0">Erro: '+err.message+'</p>';
     }
   }
+
+  // ── CTL / ATL / TSB chart ─────────────────────────────────────────────────
+  const fe = document.getElementById('cform');
+  if(fe && fm && fm.last180){
+    try{
+      const fd = fm.last180.filter((_,i)=>i%3===0); // sample every 3 days
+      const poaDate = '2026-05-30';
+      if(FC)FC.destroy();
+      FC=new Chart(fe,{
+        data:{
+          labels:fd.map(d=>d.date.slice(5)),
+          datasets:[
+            {type:'line',label:'CTL',data:fd.map(d=>d.ctl),yAxisID:'yF',borderColor:'#4ade80',backgroundColor:'rgba(74,222,128,0.06)',borderWidth:2,pointRadius:0,fill:true,tension:0.4},
+            {type:'line',label:'ATL',data:fd.map(d=>d.atl),yAxisID:'yF',borderColor:'#f87171',backgroundColor:'rgba(248,113,113,0.06)',borderWidth:1.5,borderDash:[4,3],pointRadius:0,fill:false,tension:0.4},
+            {type:'line',label:'TSB',data:fd.map(d=>d.tsb),yAxisID:'yT',borderColor:'#fbbf24',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,tension:0.4},
+          ]
+        },
+        options:{
+          responsive:true,maintainAspectRatio:false,
+          plugins:{legend:{display:false},
+            tooltip:{...tt,callbacks:{label:c=>`  ${c.dataset.label}: ${c.parsed.y>0?'+':''}${c.parsed.y.toFixed(0)}`}},
+            annotation:{annotations:{raceDay:{type:'line',xMin:poaDate.slice(5),xMax:poaDate.slice(5),borderColor:'#a78bfa',borderWidth:1.5,borderDash:[4,3],label:{content:'POA',enabled:true,position:'start',color:'#a78bfa',font:{size:10}}}}}
+          },
+          scales:{
+            yF:{position:'left',min:0,max:Math.max(60,...fd.map(d=>d.ctl))+5,ticks:{...tc},grid:{color:gclr},border:{display:false}},
+            yT:{position:'right',ticks:{...tc,color:'#fbbf24',callback:v=>(v>=0?'+':'')+Math.round(v)},grid:{display:false},border:{display:false}},
+            x:{ticks:{...tc,maxTicksLimit:8},grid:{display:false},border:{display:false}}
+          }
+        }
+      });
+    }catch(err){console.error('CTL chart:',err);}
+  }
 }
 
 function render(){
@@ -521,15 +655,11 @@ function rdDash(){
       <div class="rc rcg"><div class="rl">Meia Internacional POA</div><div class="rd">${pd>0?pd:'✓'}</div><div class="rs">dias · meta 1:38–1:41</div></div>
       <div class="rc rcp"><div class="rl">Maratona Amsterdam</div><div class="rd">${ad>0?ad:'✓'}</div><div class="rs">dias · estimativa em progresso</div></div>
     </div>
-    <div class="kg">
-      <div class="kpi"><div class="kl">Volume 30d</div><div class="kv">${s.v30.toFixed(0)}<span style="font-size:14px;color:var(--t2)"> km</span></div><div class="ks">${vts} vs mês ant.</div></div>
-      <div class="kpi"><div class="kl">Último longão</div><div class="kv">${s.ll?s.ll.dist_km.toFixed(0)+'<span style="font-size:14px;color:var(--t2)"> km</span>':'—'}</div><div class="ks">${s.ll?ps(s.ll.pace_min_km)+'/km · FC '+Math.round(s.ll.hr_avg||0):'nenhum'}</div></div>
-      <div class="kpi"><div class="kl">Tiros 90d</div><div class="kv">${s.ints.length}</div><div class="ks">${s.li?'último: '+s.li.date.slice(5):'nenhum'}</div></div>
-      <div class="kpi"><div class="kl">Melhor progressivo</div><div class="kv" style="font-size:20px">${s.bp?ps(s.bp)+'/km':'—'}</div><div class="ks">km mais rápido · 90d</div></div>
-    </div>
+    <div class="kg" id="kpi-row"></div>
     ${s.pt.length>1?'<div class="cd"><div class="ct">Evolução do pace — longões<div style="display:flex;gap:12px"><span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)"><span style="width:8px;height:8px;border-radius:2px;background:#4ade80;display:inline-block"></span>Pace</span><span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)"><span style="width:8px;height:8px;border-radius:2px;background:#f87171;display:inline-block"></span>FC</span></div></div><div style="height:200px"><canvas id="cp"></canvas></div></div>':''}
+    <div class="cd" style="margin-bottom:14px"><div class="ct">Fitness · Fadiga · Forma (CTL / ATL / TSB)<div style="display:flex;gap:10px"><span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)"><span style="width:8px;height:3px;background:#4ade80;display:inline-block;border-radius:1px"></span>CTL</span><span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)"><span style="width:8px;height:3px;background:#f87171;display:inline-block;border-radius:1px"></span>ATL</span><span style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--t2)"><span style="width:8px;height:3px;background:#fbbf24;border-top:1px dashed #fbbf24;display:inline-block"></span>TSB</span></div></div><p style="font-size:11px;color:var(--t3);font-family:var(--mono);margin:-8px 0 10px">TSB ideal para prova: entre +5 e +25</p><div style="height:180px"><canvas id="cform"></canvas></div></div>
     <div class="bg2g">
-      ${s.wv.length>1?'<div class="cd" style="margin-bottom:0"><div class="ct">Volume semanal — 90 dias</div><div style="height:140px"><canvas id="cv"></canvas></div></div>':'<div></div>'}
+      ${s.wv.length>1?'<div class="cd" style="margin-bottom:0"><div class="ct">Volume semanal · TSS (carga)</div><div style="height:140px"><canvas id="cv"></canvas></div></div>':'<div></div>'}
       <div class="cd" style="margin-bottom:0"><div class="ct">Mix de treino — 90d</div>
         ${Object.entries(s.sct).map(([t,n])=>'<div class="sbr"><div class="sbh"><span style="font-size:11px;color:'+clr(t)+';font-family:var(--mono)">'+lbl(t)+'</span><span class="mu" style="font-size:11px">'+n+' ('+Math.round(n/s.tot*100)+'%)</span></div><div class="sbbg"><div class="sbf" style="width:'+Math.round(n/s.tot*100)+'%;background:'+clr(t)+'"></div></div></div>').join('')}
       </div>
@@ -540,7 +670,9 @@ function rdDash(){
       <table class="rt"><thead><tr><th>Data</th><th>Tipo</th><th>Nome</th><th style="text-align:right">km</th><th style="text-align:right">Pace</th><th style="text-align:right">FC</th></tr></thead>
       <tbody>${[...RUNS].reverse().slice(0,10).map(r=>'<tr><td class="mu">'+r.date.slice(5)+'</td><td><span class="badge '+BC[r.type]+'">'+SL[r.type]+'</span></td><td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+r.name+'</td><td class="mu" style="text-align:right">'+r.dist_km.toFixed(1)+'</td><td class="pa" style="text-align:right">'+ps(r.pace_min_km)+'</td><td class="mu" style="text-align:right">'+(r.hr_avg?Math.round(r.hr_avg):'—')+'</td></tr>').join('')}</tbody></table>
     </div>`;
-  requestAnimationFrame(()=>buildCharts(s));
+  const _fm = getFormSummary();
+  document.getElementById('kpi-row').innerHTML = buildKPIs(s, _fm);
+  requestAnimationFrame(()=>buildCharts(s, _fm));
 }
 
 
@@ -676,7 +808,18 @@ async function runAnalysis(){
   const l90=last(90).sort((a,b)=>b.date.localeCompare(a.date));
   const s=stats();
   const lines=l90.map(r=>r.date+' ['+SL[r.type]+'] '+r.dist_km.toFixed(1)+'km '+ps(r.pace_min_km)+'/km FC:'+Math.round(r.hr_avg||0)+'avg/'+Math.round(r.hr_max||0)+'max').join('\n');
-  // Build zone and drift summaries
+  // Build zone and drift summaries + performance metrics
+  const _fm2 = getFormSummary();
+  const _today = _fm2.today;
+  const hmPredMin = predictRaceTime(PR_VDOT, 21097);
+  const maPredMin = predictRaceTime(PR_VDOT, 42195);
+  const dPOA = Math.ceil((new Date('2026-05-30T07:00:00')-new Date())/864e5);
+  const hrTSSLines = l90.map(r=>{
+    const tss = calcHRTSS(r.moving_sec, r.hr_avg);
+    return `${r.date} [${SL[r.type]}] ${r.dist_km.toFixed(1)}km ${ps(r.pace_min_km)}/km FC:${Math.round(r.hr_avg||0)} hrTSS:${tss.toFixed(0)}`;
+  }).join('\n');
+  const monthlyVdotStr = _fm2.monthly_vdot.map(m=>`${m.month}: VDOT~${m.avg}`).join(' | ');
+
   const _zs=s.zoneData;
   const _zoneSummary=Object.keys(_zs).sort().map(m=>{
     const z=_zs[m];
@@ -689,7 +832,16 @@ async function runAnalysis(){
   const todayStr=today.toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
   const daysUntilPOA=Math.ceil((new Date('2026-05-30T07:00:00')-today)/864e5);
 
-  const prompt='Você é um treinador de corrida especialista. Analise com foco em evolução real de performance.\n\n'
+  const prompt='Você é um treinador de corrida especialista. Analise com rigor científico baseado em VDOT (Daniels), CTL/ATL/TSB (Banister) e hrTSS.\n\n'
+    +'MÉTRICAS DE PERFORMANCE (modelos científicos):\n'
+    +'VDOT do PR: '+PR_VDOT.toFixed(2)+' (base: meia 1:43, 4:50/km, FC174)\n'
+    +'VDOT prediz: HM='+fmtRaceTime(hmPredMin)+' | MAR='+fmtRaceTime(maPredMin)+'\n'
+    +'CTL hoje (fitness 42d): '+_today.ctl.toFixed(0)+' | Pico histórico: '+_fm2.peak_ctl.toFixed(0)+'\n'
+    +'ATL hoje (fadiga 7d): '+_today.atl.toFixed(0)+'\n'
+    +'TSB hoje (forma = CTL-ATL): '+(+_today.tsb>=0?'+':'')+_today.tsb.toFixed(0)+' (ideal prova: +5 a +25)\n'
+    +'VDOT de treino por mês (estimado): '+monthlyVdotStr+'\n'
+    +'FC limiar usada no cálculo: '+getHRThresh()+' bpm\n'
+    +'Dias até POA: '+dPOA+'\n\n'
     +'DATA DE HOJE: '+todayStr+' ('+daysUntilPOA+' dias até a Meia de POA)\n\n'
     +'ATLETA: PR atual = Meia Maratona POA junho 2025\n'
     +'  Distancia: 21.4km | Tempo: 1:43 | Pace: 4:50/km | FC media: 174 bpm | FC max: ~184 bpm\n'
